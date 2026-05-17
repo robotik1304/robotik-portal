@@ -1000,6 +1000,381 @@ const NotificacionesModule = ({ cliente, robotsData, onRead }) => {
   );
 };
 
+
+// ─── ADMIN CONFIG ─────────────────────────────────────────────────────────────
+const ADMIN_EMAILS = ["admin@robot-ik.com", "fredyf@robot-ik.com"];
+const isAdmin = (email) => ADMIN_EMAILS.includes(email?.toLowerCase());
+
+// ─── ADMIN PANEL ──────────────────────────────────────────────────────────────
+const AdminPanel = ({ adminUser, onLogout }) => {
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [tickets, setTickets] = useState([]);
+  const [chats, setChats] = useState([]);
+  const [clientesData, setClientesData] = useState({});
+  const [selectedChat, setSelectedChat] = useState(null);
+  const [chatInput, setChatInput] = useState("");
+  const [selectedTicket, setSelectedTicket] = useState(null);
+  const [notaAdmin, setNotaAdmin] = useState("");
+  const chatRef = useRef();
+
+  const now = () => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  };
+
+  // Load all tickets from Firestore
+  useEffect(() => {
+    const q = query(collection(db, "historial"), orderBy("fechaCompleta", "desc"));
+    const unsub = onSnapshot(q, snap => {
+      setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, e => console.log("tickets error:", e));
+    return () => unsub();
+  }, []);
+
+  // Load all chats
+  useEffect(() => {
+    const q = query(collection(db, "chats"), orderBy("timestamp", "desc"));
+    const unsub = onSnapshot(q, snap => {
+      const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Group by chatId
+      const grouped = {};
+      msgs.forEach(m => {
+        if (!grouped[m.chatId]) grouped[m.chatId] = { chatId: m.chatId, empresa: m.empresa, clienteId: m.clienteId, msgs: [], ultimoMsg: m };
+        grouped[m.chatId].msgs.unshift(m);
+      });
+      setChats(Object.values(grouped).sort((a,b) => (b.ultimoMsg?.fechaCompleta||"").localeCompare(a.ultimoMsg?.fechaCompleta||"")));
+    }, e => console.log("chats error:", e));
+    return () => unsub();
+  }, []);
+
+  // Scroll chat to bottom
+  useEffect(() => {
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+  }, [selectedChat, chats]);
+
+  const sendAdminChat = async () => {
+    if (!chatInput.trim() || !selectedChat) return;
+    const msg = {
+      chatId: selectedChat.chatId,
+      clienteId: selectedChat.clienteId,
+      empresa: selectedChat.empresa,
+      de: "tecnico",
+      autor: "Fredy Moyano",
+      texto: chatInput,
+      ts: now(),
+      timestamp: serverTimestamp(),
+    };
+    setChatInput("");
+    try { await addDoc(collection(db, "chats"), msg); }
+    catch(e) { console.log("send error:", e); }
+  };
+
+  const updateTicketEstado = async (ticketId, nuevoEstado) => {
+    try {
+      await updateDoc(doc(db, "historial", ticketId), { estado: nuevoEstado });
+    } catch(e) { console.log("update error:", e); }
+  };
+
+  const addNotaAdmin = async (ticketId) => {
+    if (!notaAdmin.trim()) return;
+    try {
+      await updateDoc(doc(db, "historial", ticketId), {
+        notaAdmin: notaAdmin,
+        notaAdminFecha: new Date().toISOString().slice(0,10),
+      });
+      setNotaAdmin("");
+      setSelectedTicket(null);
+    } catch(e) { console.log("nota error:", e); }
+  };
+
+  const abiertos = tickets.filter(t => t.estado === "ABIERTO");
+  const enProceso = tickets.filter(t => t.estado === "EN PROCESO");
+  const selectedChatMsgs = selectedChat ? (chats.find(c => c.chatId === selectedChat.chatId)?.msgs || []) : [];
+  const chatsActivos = chats.filter(c => c.msgs.some(m => m.de === "cliente" && !c.msgs.find(m2 => m2.de === "sistema" && m2.texto?.includes("cerrada"))));
+
+  const ADMIN_TABS = [
+    { id:"dashboard", icon:"⊞", label:"RESUMEN" },
+    { id:"chats", icon:"💬", label:"CHATS", badge: chatsActivos.length },
+    { id:"tickets", icon:"⚠", label:"TICKETS", badge: abiertos.length },
+    { id:"clientes", icon:"🏭", label:"CLIENTES" },
+  ];
+
+  return (
+    <div style={{ display:"flex", height:"100vh", overflow:"hidden" }}>
+      {/* Admin Sidebar */}
+      <div style={{ width:230, height:"100vh", background:C.surface, borderRight:`1px solid ${C.border}`, display:"flex", flexDirection:"column", flexShrink:0 }}>
+        <div style={{ padding:"18px 12px 14px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"center" }}>
+          <RobotIKLogo height={44} showSubtitle={false} />
+        </div>
+        <div style={{ padding:"12px 16px", borderBottom:`1px solid ${C.border}`, background:`${C.red}11` }}>
+          <div style={{ fontSize:11, color:C.red, letterSpacing:"0.1em", marginBottom:4, fontWeight:700 }}>PANEL ADMINISTRADOR</div>
+          <div style={{ fontSize:13, color:C.textPrimary, fontWeight:600 }}>Fredy Moyano</div>
+          <div style={{ fontSize:11, color:C.textSecondary }}>Robot-IK · Técnico</div>
+        </div>
+        <nav style={{ flex:1, padding:"8px 0", overflowY:"auto" }}>
+          {ADMIN_TABS.map(tab => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ width:"100%", padding:"11px 16px", display:"flex", alignItems:"center", gap:10, background:isActive?`${C.cyan}18`:"transparent", border:"none", borderLeft:isActive?`3px solid ${C.cyan}`:"3px solid transparent", color:isActive?C.cyan:C.textSecondary, cursor:"pointer", textAlign:"left", fontSize:13, fontFamily:"'Rajdhani',sans-serif", fontWeight:isActive?700:500, letterSpacing:"0.06em", transition:"all 0.15s" }}>
+                <span style={{ fontSize:15, width:20, textAlign:"center" }}>{tab.icon}</span>
+                <span style={{ flex:1 }}>{tab.label}</span>
+                {tab.badge > 0 && <span style={{ background:C.red, color:"#fff", fontSize:10, fontFamily:"'Share Tech Mono',monospace", borderRadius:"50%", width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", animation:"badge-pulse 2s infinite" }}>{tab.badge}</span>}
+              </button>
+            );
+          })}
+        </nav>
+        <div style={{ padding:"12px 16px", borderTop:`1px solid ${C.border}` }}>
+          <Clock color={C.textMuted} style={{ fontSize:11, display:"block", marginBottom:10 }} />
+          <button onClick={onLogout} style={{ width:"100%", padding:"9px 14px", background:"transparent", border:`1px solid ${C.border}`, borderRadius:5, color:C.textMuted, cursor:"pointer", fontSize:12, fontFamily:"'Rajdhani',sans-serif", fontWeight:600, letterSpacing:"0.06em", transition:"all 0.2s" }}
+            onMouseEnter={e=>{e.target.style.borderColor=C.red;e.target.style.color=C.red;}}
+            onMouseLeave={e=>{e.target.style.borderColor=C.border;e.target.style.color=C.textMuted;}}>↩ CERRAR SESIÓN</button>
+        </div>
+      </div>
+
+      {/* Admin Content */}
+      <div style={{ flex:1, overflowY:"auto", padding:28, background:C.bg }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:28, paddingBottom:16, borderBottom:`1px solid ${C.border}` }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ width:8, height:8, borderRadius:"50%", background:C.red, animation:"pulse-red 2s infinite" }} />
+            <span style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:12, color:C.red, fontWeight:700, letterSpacing:"0.1em" }}>PANEL DE ADMINISTRACIÓN — ROBOT-IK</span>
+          </div>
+          <Clock color={C.textMuted} />
+        </div>
+
+        {/* ── DASHBOARD TAB ── */}
+        {activeTab === "dashboard" && (
+          <div style={{ animation:"fade-in-up 0.35s ease" }}>
+            <SectionTitle icon="⊞" title="RESUMEN OPERATIVO" sub="Estado en tiempo real de todos los clientes" />
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:28 }}>
+              {[
+                { label:"TICKETS ABIERTOS", value:abiertos.length, color:abiertos.length>0?C.red:C.green, icon:"⚠" },
+                { label:"EN PROCESO", value:enProceso.length, color:enProceso.length>0?C.yellow:C.textMuted, icon:"🔄" },
+                { label:"CHATS ACTIVOS", value:chatsActivos.length, color:chatsActivos.length>0?C.cyan:C.textMuted, icon:"💬" },
+                { label:"TOTAL REGISTROS", value:tickets.length, color:C.blue, icon:"📋" },
+              ].map((kpi,i) => (
+                <Card key={i} style={{ textAlign:"center", padding:16 }}>
+                  <div style={{ fontSize:22, marginBottom:6 }}>{kpi.icon}</div>
+                  <div style={{ fontFamily:"'Orbitron',sans-serif", fontSize:28, fontWeight:800, color:kpi.color }}>{kpi.value}</div>
+                  <div style={{ fontSize:11, color:C.textMuted, letterSpacing:"0.1em", marginTop:4 }}>{kpi.label}</div>
+                </Card>
+              ))}
+            </div>
+
+            {/* Tickets urgentes */}
+            {abiertos.length > 0 && (
+              <div style={{ marginBottom:24 }}>
+                <h3 style={{ fontFamily:"'Orbitron',sans-serif", fontSize:13, color:C.red, letterSpacing:"0.1em", marginBottom:14 }}>🚨 TICKETS ABIERTOS</h3>
+                {abiertos.slice(0,5).map((t,i) => (
+                  <div key={t.id||i} style={{ background:C.surface, border:`1px solid ${C.red}44`, borderLeft:`4px solid ${C.red}`, borderRadius:6, padding:"14px 18px", marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <div>
+                      <div style={{ fontWeight:700, fontSize:14, color:C.textPrimary }}>{t.titulo}</div>
+                      <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:C.textMuted, marginTop:2 }}>{t.fecha} · {t.empresa} · {t.robotNombre}</div>
+                      <div style={{ fontSize:13, color:C.textSecondary, marginTop:4 }}>{t.descripcion?.slice(0,100)}{t.descripcion?.length > 100 ? "..." : ""}</div>
+                    </div>
+                    <div style={{ display:"flex", gap:8, flexShrink:0, marginLeft:16 }}>
+                      <Btn onClick={() => updateTicketEstado(t.id, "EN PROCESO")} color={C.yellow} small>EN PROCESO</Btn>
+                      <Btn onClick={() => updateTicketEstado(t.id, "CERRADO")} color={C.green} small>CERRAR</Btn>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Chats recientes */}
+            {chatsActivos.length > 0 && (
+              <div>
+                <h3 style={{ fontFamily:"'Orbitron',sans-serif", fontSize:13, color:C.cyan, letterSpacing:"0.1em", marginBottom:14 }}>💬 CHATS SIN RESPONDER</h3>
+                {chatsActivos.slice(0,3).map((c,i) => {
+                  const ultimoCliente = [...c.msgs].reverse().find(m => m.de === "cliente");
+                  return (
+                    <div key={c.chatId||i} style={{ background:C.surface, border:`1px solid ${C.cyan}33`, borderLeft:`4px solid ${C.cyan}`, borderRadius:6, padding:"14px 18px", marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }}
+                      onClick={() => { setSelectedChat(c); setActiveTab("chats"); }}>
+                      <div>
+                        <div style={{ fontWeight:700, fontSize:14, color:C.textPrimary }}>{c.empresa}</div>
+                        <div style={{ fontSize:13, color:C.textSecondary, marginTop:4 }}>{ultimoCliente?.texto?.slice(0,80)}...</div>
+                        <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:C.textMuted, marginTop:2 }}>{ultimoCliente?.ts}</div>
+                      </div>
+                      <Btn color={C.cyan} small>RESPONDER →</Btn>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {abiertos.length === 0 && chatsActivos.length === 0 && (
+              <Card style={{ textAlign:"center", padding:40 }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>✅</div>
+                <div style={{ fontFamily:"'Orbitron',sans-serif", fontSize:18, color:C.green }}>TODO AL DÍA</div>
+                <div style={{ color:C.textSecondary, marginTop:8 }}>Sin tickets abiertos ni chats pendientes.</div>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* ── CHATS TAB ── */}
+        {activeTab === "chats" && (
+          <div style={{ animation:"fade-in-up 0.35s ease" }}>
+            <SectionTitle icon="💬" title="CHATS DE CLIENTES" sub="Respondé consultas en tiempo real" />
+            <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", gap:16, height:"calc(100vh - 200px)" }}>
+              {/* Lista de chats */}
+              <div style={{ overflowY:"auto" }}>
+                {chats.length === 0 ? <Card style={{ textAlign:"center", color:C.textMuted, padding:24 }}>Sin chats</Card>
+                : chats.map((c,i) => {
+                  const ultimoMsg = c.msgs[c.msgs.length-1];
+                  const isSelected = selectedChat?.chatId === c.chatId;
+                  const tieneMensajesCliente = c.msgs.some(m => m.de === "cliente");
+                  return (
+                    <div key={c.chatId||i} onClick={() => setSelectedChat(c)} style={{ padding:"12px 14px", borderRadius:6, marginBottom:8, cursor:"pointer", background:isSelected?`${C.cyan}18`:C.surface2, border:`1px solid ${isSelected?C.cyan:tieneMensajesCliente?C.cyan+"33":C.border}`, transition:"all 0.15s" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:4 }}>
+                        <div style={{ fontWeight:700, fontSize:14, color:isSelected?C.cyan:C.textPrimary }}>{c.empresa||"Cliente"}</div>
+                        {tieneMensajesCliente && <div style={{ width:8, height:8, borderRadius:"50%", background:C.cyan, animation:"pulse-green 2s infinite", flexShrink:0 }} />}
+                      </div>
+                      <div style={{ fontSize:12, color:C.textSecondary, lineHeight:1.4 }}>{ultimoMsg?.texto?.slice(0,50)}...</div>
+                      <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:10, color:C.textMuted, marginTop:4 }}>{ultimoMsg?.ts}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Panel de chat */}
+              {selectedChat ? (
+                <Card style={{ display:"flex", flexDirection:"column", padding:0, overflow:"hidden" }}>
+                  <div style={{ padding:"14px 18px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <div>
+                      <div style={{ fontFamily:"'Orbitron',sans-serif", fontSize:14, color:C.cyan, fontWeight:700 }}>{selectedChat.empresa}</div>
+                      <div style={{ fontSize:12, color:C.textMuted }}>Chat ID: {selectedChat.chatId}</div>
+                    </div>
+                    <Badge text="EN VIVO" color={C.green} />
+                  </div>
+                  <div ref={chatRef} style={{ flex:1, overflowY:"auto", padding:"16px 18px", display:"flex", flexDirection:"column", gap:10, background:C.bg }}>
+                    {selectedChatMsgs.map((m,idx) => (
+                      <div key={m.id||idx} style={{ animation:"chat-in 0.3s ease", display:"flex", flexDirection:"column", alignItems:m.de==="tecnico"?"flex-end":m.de==="sistema"?"center":"flex-start" }}>
+                        {m.de==="sistema" ? (
+                          <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:"8px 14px", fontSize:12, color:C.textMuted, textAlign:"center", maxWidth:"90%" }}>{m.texto}</div>
+                        ) : (
+                          <div style={{ maxWidth:"75%" }}>
+                            <div style={{ fontSize:10, color:C.textMuted, marginBottom:3, textAlign:m.de==="tecnico"?"right":"left" }}>
+                              {m.autor||m.de} {m.ts && `· ${m.ts}`}
+                            </div>
+                            <div style={{ padding:"10px 14px", borderRadius:m.de==="tecnico"?"12px 12px 2px 12px":"12px 12px 12px 2px", background:m.de==="tecnico"?`${C.cyan}33`:`${C.blue}22`, border:`1px solid ${m.de==="tecnico"?C.cyan+"55":C.blue+"44"}`, fontSize:14, color:C.textPrimary, lineHeight:1.5 }}>{m.texto}</div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ padding:"12px 18px", borderTop:`1px solid ${C.border}`, display:"flex", gap:10 }}>
+                    <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key==="Enter" && sendAdminChat()} placeholder={`Responder a ${selectedChat.empresa}...`}
+                      style={{ flex:1, padding:"10px 14px", background:C.bg, border:`1px solid ${C.border}`, borderRadius:5, color:C.textPrimary, fontFamily:"'Rajdhani',sans-serif", fontSize:14, outline:"none" }}
+                      onFocus={e=>e.target.style.borderColor=C.cyan} onBlur={e=>e.target.style.borderColor=C.border} />
+                    <Btn onClick={sendAdminChat} disabled={!chatInput.trim()} color={C.cyan} small>ENVIAR</Btn>
+                  </div>
+                </Card>
+              ) : (
+                <Card style={{ display:"flex", alignItems:"center", justifyContent:"center", color:C.textMuted, flexDirection:"column", gap:12 }}>
+                  <div style={{ fontSize:40 }}>💬</div>
+                  <div>Seleccioná un chat para responder</div>
+                </Card>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── TICKETS TAB ── */}
+        {activeTab === "tickets" && (
+          <div style={{ animation:"fade-in-up 0.35s ease" }}>
+            <SectionTitle icon="⚠" title="TICKETS Y REPORTES" sub="Todos los reportes de todos los clientes" />
+            {tickets.length === 0 ? <Card style={{ textAlign:"center", color:C.textMuted, padding:32 }}>Sin tickets registrados</Card>
+            : tickets.map((t,i) => (
+              <div key={t.id||i} style={{ background:C.surface, border:`1px solid ${t.estado==="ABIERTO"?C.red+"44":t.estado==="EN PROCESO"?C.yellow+"44":C.border}`, borderLeft:`4px solid ${t.estado==="ABIERTO"?C.red:t.estado==="EN PROCESO"?C.yellow:C.green}`, borderRadius:6, padding:"14px 18px", marginBottom:10 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                  <div>
+                    <div style={{ fontWeight:700, fontSize:15, color:C.textPrimary }}>{t.titulo}</div>
+                    <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:C.textMuted, marginTop:2 }}>{t.fecha} · {t.empresa} · {t.robotNombre||t.robotId}</div>
+                  </div>
+                  <div style={{ display:"flex", gap:6, flexShrink:0, marginLeft:12 }}>
+                    <Badge text={t.tipo} color={tipoColor(t.tipo)} />
+                    <Badge text={t.estado} color={t.estado==="ABIERTO"?C.red:t.estado==="EN PROCESO"?C.yellow:C.green} />
+                  </div>
+                </div>
+                <div style={{ fontSize:13, color:C.textSecondary, marginBottom:12 }}>{t.descripcion}</div>
+                {t.notaAdmin && (
+                  <div style={{ background:`${C.cyan}11`, border:`1px solid ${C.cyan}33`, borderRadius:5, padding:"8px 12px", marginBottom:10 }}>
+                    <div style={{ fontSize:11, color:C.cyan, marginBottom:2 }}>NOTA TÉCNICA — {t.notaAdminFecha}</div>
+                    <div style={{ fontSize:13, color:C.textSecondary }}>{t.notaAdmin}</div>
+                  </div>
+                )}
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+                  {t.estado !== "CERRADO" && <>
+                    {t.estado === "ABIERTO" && <Btn onClick={() => updateTicketEstado(t.id, "EN PROCESO")} color={C.yellow} small>→ EN PROCESO</Btn>}
+                    <Btn onClick={() => updateTicketEstado(t.id, "CERRADO")} color={C.green} small>✓ CERRAR</Btn>
+                  </>}
+                  {t.estado === "CERRADO" && <Btn onClick={() => updateTicketEstado(t.id, "ABIERTO")} color={C.textMuted} variant="secondary" small>↩ REABRIR</Btn>}
+                  <button onClick={() => setSelectedTicket(selectedTicket?.id===t.id?null:t)} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:4, padding:"6px 12px", color:C.textMuted, cursor:"pointer", fontSize:12, fontFamily:"'Rajdhani',sans-serif" }}>
+                    {selectedTicket?.id===t.id?"↑ CERRAR NOTA":"✏ AGREGAR NOTA"}
+                  </button>
+                </div>
+                {selectedTicket?.id === t.id && (
+                  <div style={{ marginTop:12, display:"flex", gap:8 }}>
+                    <input value={notaAdmin} onChange={e => setNotaAdmin(e.target.value)} placeholder="Escribí la nota técnica..."
+                      style={{ flex:1, padding:"9px 12px", background:C.bg, border:`1px solid ${C.cyan}44`, borderRadius:5, color:C.textPrimary, fontFamily:"'Rajdhani',sans-serif", fontSize:13, outline:"none" }}
+                      onKeyDown={e => e.key==="Enter" && addNotaAdmin(t.id)} />
+                    <Btn onClick={() => addNotaAdmin(t.id)} disabled={!notaAdmin.trim()} color={C.cyan} small>GUARDAR</Btn>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── CLIENTES TAB ── */}
+        {activeTab === "clientes" && (
+          <div style={{ animation:"fade-in-up 0.35s ease" }}>
+            <SectionTitle icon="🏭" title="CLIENTES REGISTRADOS" sub="Vista de todos los clientes y sus equipos" />
+            {Object.values(CLIENTES_DEMO).map((c,i) => {
+              const clienteTickets = tickets.filter(t => t.clienteId === c.id);
+              const abiertosCliente = clienteTickets.filter(t => t.estado === "ABIERTO").length;
+              return (
+                <Card key={c.id} style={{ marginBottom:14 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
+                    <div>
+                      <div style={{ fontFamily:"'Orbitron',sans-serif", fontSize:16, color:C.textPrimary, fontWeight:700 }}>{c.empresa}</div>
+                      <div style={{ fontSize:13, color:C.textSecondary, marginTop:4 }}>👤 {c.contacto} · ✉ {c.email} · 📍 {c.ciudad}</div>
+                    </div>
+                    <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                      <Badge text={c.plan} color={c.plan==="PREMIUM"?C.cyan:C.blue} />
+                      {abiertosCliente > 0 && <Badge text={`${abiertosCliente} ABIERTOS`} color={C.red} />}
+                    </div>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))", gap:10 }}>
+                    {(c.robots||[]).map(rid => {
+                      const r = ROBOTS_DEMO[rid];
+                      if (!r) return null;
+                      return (
+                        <div key={rid} style={{ background:C.surface2, borderRadius:6, padding:"12px 14px", border:`1px solid ${r.estado==="ALERTA"?C.red+"44":C.border}` }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                            <span style={{ fontWeight:700, fontSize:13, color:C.textPrimary }}>{r.nombre}</span>
+                            <Led estado={r.estado} />
+                          </div>
+                          <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:C.textMuted }}>{r.modelo} · {r.controlador}</div>
+                          <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:12, color:C.cyan, marginTop:4 }}>{r.horasServo.toLocaleString()} hs servo</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ marginTop:12, display:"flex", gap:8 }}>
+                    <Btn onClick={() => setActiveTab("tickets")} color={C.textMuted} variant="secondary" small>📋 Ver tickets ({clienteTickets.length})</Btn>
+                    <Btn onClick={() => { const c2 = chats.find(ch => ch.clienteId === c.id); if(c2){setSelectedChat(c2); setActiveTab("chats");} }} color={C.cyan} variant="secondary" small>💬 Ver chat</Btn>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [cliente,setCliente] = useState(null);
@@ -1046,6 +1421,13 @@ export default function App() {
   );
 
   if(!cliente) return (<><FontLoader/><GlobalStyle/><LoginScreen onLogin={c=>setCliente(c)}/></>);
+
+  // Admin panel detection
+  if(isAdmin(cliente.email)) return (
+    <><FontLoader/><GlobalStyle/>
+      <AdminPanel adminUser={cliente} onLogout={async()=>{ try{await signOut(auth);}catch(e){} setCliente(null); }}/>
+    </>
+  );
 
   const handleReporteSaved = (reporte)=>{ setHistorialData(p=>[reporte,...p]); };
   const handleBackupSaved = (backup)=>{ setHistorialData(p=>[backup,...p]); };
