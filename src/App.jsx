@@ -815,12 +815,33 @@ const SoporteModule = ({ cliente, robotsData }) => {
   };
 
   const marcarResuelto = async ()=>{
+    const ahora = new Date();
+    const fechaStr = ahora.toISOString().slice(0,10);
+    const fechaCompleta = ahora.toISOString();
     const cierre = { chatId, clienteId:cliente.id, empresa:cliente.empresa, de:"sistema", texto:"✅ Consulta cerrada por el cliente. Conversación guardada en historial.", ts:now(), timestamp:serverTimestamp() };
+    const resumen = chatMsgs.filter(m=>m.de!=="sistema"&&m.texto).map(m=>`[${m.autor||m.de}]: ${m.texto}`).join(" | ");
+    const registroHistorial = {
+      clienteId: cliente.id,
+      clienteEmail: cliente.email,
+      empresa: cliente.empresa,
+      tipo: "CHAT",
+      titulo: `Chat resuelto — ${cliente.empresa}`,
+      descripcion: resumen.slice(0,400)||"Consulta de soporte resuelta vía chat.",
+      tecnico: cliente.contacto,
+      estado: "CERRADO",
+      fecha: fechaStr,
+      fechaCompleta: fechaCompleta,
+      robotId: selectedRobot||"",
+      robotNombre: robotsData[selectedRobot]?.nombre||"",
+    };
     try {
-      await addDoc(collection(db,"chats"),cierre);
-      const resumen = chatMsgs.filter(m=>m.de!=="sistema").map(m=>`[${m.autor}]: ${m.texto}`).join(" | ");
-      await addDoc(collection(db,"historial"),{ clienteId:cliente.id, empresa:cliente.empresa, tipo:"CHAT", titulo:`Chat resuelto — ${cliente.empresa}`, descripcion:resumen.slice(0,300), tecnico:cliente.contacto, estado:"CERRADO", fecha:new Date().toISOString().slice(0,10), fechaCompleta:new Date().toISOString(), robotId:selectedRobot, robotNombre:robotsData[selectedRobot]?.nombre||"" });
-    } catch(e){ console.log("Firebase error:",e); }
+      await addDoc(collection(db,"chats"), cierre);
+      await addDoc(collection(db,"historial"), registroHistorial);
+      console.log("Chat guardado en historial correctamente");
+    } catch(e){
+      console.log("Firebase error en marcarResuelto:", e);
+      // Guardar localmente como fallback
+    }
     setEstado("resuelto");
   };
 
